@@ -23,6 +23,10 @@ public class AwsCdkApp {
                         .region(System.getenv("CDK_DEFAULT_REGION"))
                         .build())
                 */
+                .env(Environment.builder()
+                        .account("515966492834")
+                        .region(System.getenv("CDK_DEFAULT_REGION"))
+                        .build())
 
                 // Uncomment the next block if you know exactly what Account and Region you
                 // want to deploy the stack to.
