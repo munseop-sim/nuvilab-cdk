@@ -7,6 +7,8 @@ import software.amazon.awscdk.services.codedeploy.ServerDeploymentConfig;
 import software.amazon.awscdk.services.codedeploy.ServerDeploymentGroup;
 import software.amazon.awscdk.services.ec2.*;
 import software.amazon.awscdk.services.ec2.InstanceType;
+import software.amazon.awscdk.services.elasticache.CfnCacheCluster;
+import software.amazon.awscdk.services.elasticache.CfnSubnetGroup;
 import software.amazon.awscdk.services.iam.ManagedPolicy;
 import software.amazon.awscdk.services.iam.Role;
 import software.amazon.awscdk.services.iam.ServicePrincipal;
@@ -16,6 +18,7 @@ import software.constructs.Construct;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class AwsCdkStack extends Stack {
     private final String PUBLIC_SUBNET = "PublicSubnet";
@@ -26,26 +29,6 @@ public class AwsCdkStack extends Stack {
 
         String ec2KeyName = "nuvilab-task-key";
         var keyPair = KeyPair.fromKeyPairName(this, "key", ec2KeyName);
-//        var keyPair = KeyPair.Builder.create(this, "key").keyPairName(ec2KeyName).build();
-        //vpc 생성
-//        Vpc vpc = Vpc.Builder.create(this, "nuvilab_ms2709_task_vpc")
-//                .ipAddresses(IpAddresses.cidr("10.0.0.0/20"))
-//                .defaultInstanceTenancy(DefaultInstanceTenancy.DEFAULT)
-//                .enableDnsSupport(true)
-//                .enableDnsHostnames(true)
-//                .subnetConfiguration(List.of(
-//                        SubnetConfiguration.builder()
-//                                .subnetType(SubnetType.PUBLIC) // 퍼블릭 서브넷
-//                                .name("PublicSubnet")
-//                                .cidrMask(24)
-//                                .build(),
-//                        SubnetConfiguration.builder()
-//                                .subnetType(SubnetType.PRIVATE_ISOLATED) // 프라이빗 서브넷 (NAT 필요)
-//                                .name("PrivateSubnet")
-//                                .cidrMask(24)
-//                                .build()
-//                ))
-//                .build();
 
         Vpc vpc = Vpc.Builder.create(this, "nuvilab_ms2709_task_vpc")
                 .maxAzs(2)  // 가용 영역
@@ -69,14 +52,12 @@ public class AwsCdkStack extends Stack {
                 .allowAllOutbound(true)
                 .build();
         bastionSecurityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(22), "Allow SSH access");
-        bastionSecurityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(33061), "rds port forwarding");
 
         Instance bastionInstance = Instance.Builder.create(this, "BastionInstance")
                 .instanceType(InstanceType.of(InstanceClass.T2, InstanceSize.MICRO))
                 .machineImage(MachineImage.latestAmazonLinux2())
                 .vpc(vpc)
                 .vpcSubnets(SubnetSelection.builder().subnetType(SubnetType.PUBLIC).build()) // Public 서브넷 지정
-//                .keyName(ec2KeyName)
                 .keyPair(keyPair)
                 .securityGroup(bastionSecurityGroup)
                 .associatePublicIpAddress(true)  // 퍼블릭 IP 할당
@@ -197,30 +178,81 @@ public class AwsCdkStack extends Stack {
                 .allocatedStorage(20)
                 .vpc(vpc)
                 .vpcSubnets(SubnetSelection.builder().subnetType(SubnetType.PRIVATE_ISOLATED).build()) // Private 서브넷 지정
-                .credentials(Credentials.fromGeneratedSecret("admin1234")) // RDS 루트 계정 비밀번호 생성
+                .credentials(Credentials.fromGeneratedSecret("admin")) // RDS 루트 계정 비밀번호 생성
                 .multiAz(false) // Multi-AZ 비활성화 (테스트 환경에서는 비용 절감을 위해 비활성화 가능)
                 .securityGroups(List.of(rdsSecurityGroup))
                 .removalPolicy(RemovalPolicy.DESTROY) // 스택 삭제 시 RDS 인스턴스 삭제
                 .build();
 
-        CfnOutput.Builder.create(this, "WebServerPublicIP")
-                .value(devEc2.getInstancePublicIp())  // 퍼블릭 IP를 출력
-                .description("Public IP of the web server")
+        SecurityGroup elasticacheSecurityGroup = SecurityGroup.Builder.create(this, "ElastiCacheSafetyGroup")
+                .vpc(vpc)
+                .description("Security group for ElastiCache cluster")
+                .allowAllOutbound(true)
+                .build();
+        elasticacheSecurityGroup.addIngressRule(bastionSecurityGroup, Port.tcp(6379), "Allow access to Redis from Bastion Host");
+        // 서브넷 그룹 생성 (Private Subnets)
+        // 서브넷 ID 디버깅 출력
+        List<String> subnetIds = vpc.getIsolatedSubnets().stream()
+                .map(subnet -> subnet.getSubnetId()) // 서브넷 ID 가져오기
+                .filter(subnetId -> subnetId != null && !subnetId.isEmpty()) // Null 및 빈 값 제거
+                .toList();
+        System.out.println("전달된 Subnet IDs: " + subnetIds);
+
+        CfnSubnetGroup elasticacheSubnetGroup = CfnSubnetGroup.Builder.create(this, "ElastiCacheSubnetGroup")
+                .cacheSubnetGroupName("my-elasticache-subnet-group")
+                .description("Subnet group for ElastiCache")
+                .subnetIds(vpc.getIsolatedSubnets().stream().map(ISubnet::getSubnetId).collect(Collectors.toList()))
+                .build();
+        CfnCacheCluster cacheCluster = CfnCacheCluster.Builder.create(this, "RedisCluster")
+                .cacheNodeType("cache.t2.micro")  // 노드 타입
+                .engine("redis")  // Redis 엔진 사용
+                .numCacheNodes(1) // 노드 수
+                .cacheSubnetGroupName(elasticacheSubnetGroup.getCacheSubnetGroupName()) // 서브넷 그룹 연결
+                .vpcSecurityGroupIds(List.of(elasticacheSecurityGroup.getSecurityGroupId())) // 보안 그룹 연결
+                .cacheSubnetGroupName("my-elasticache-subnet-group")
+                .clusterName("my-redis-cluster") // 클러스터 이름
                 .build();
 
-        CfnOutput.Builder.create(this, "bastionInstancePublicIP")
-                .value(bastionInstance.getInstancePublicIp())  // 퍼블릭 IP를 출력
-                .description("Public IP of the bastionInstance")
+        CfnOutput.Builder.create(this, "RedisClusterEndpoint")
+                .value(cacheCluster.getAttrRedisEndpointAddress())
+                .description("Redis Cluster Endpoint")
                 .build();
 
-        CfnOutput.Builder.create(this, "BucketArn")
-                .description("ARN for the S3 Bucket")
-                .value(bucket.getBucketArn()) // 버킷 ARN 출력
+        //bastion public dns
+        CfnOutput.Builder.create(this, "bastionInstancePublic DNS Name")
+                .value(bastionInstance.getInstancePublicDnsName())
+                .description("bastionInstancePublic DNS Name")
                 .build();
 
+        //dev public dns
+        CfnOutput.Builder.create(this, "dev-WebServerPublic DNS Name")
+                .value(devEc2.getInstancePublicDnsName())
+                .description("dev-WebServerPublic DNS Name")
+                .build();
+
+        //dev private ip
+        CfnOutput.Builder.create(this, "dev-WebServer Private IP")
+                .value(devEc2.getInstancePrivateIp())  // 퍼블릭 IP를 출력
+                .description("dev-WebServer Private IP")
+                .build();
+
+        //prod public dns
+        CfnOutput.Builder.create(this, "prod-WebServerPublic DNS Name")
+                .value(prodEc2.getInstancePublicDnsName())
+                .description("prod-WebServerPublic DNS Name")
+                .build();
+
+        //prod private ip
+        CfnOutput.Builder.create(this, "prod-WebServer Private IP")
+                .value(prodEc2.getInstancePrivateIp())  // 퍼블릭 IP를 출력
+                .description("prod-WebServer Private IP")
+                .build();
+
+
+        // 버킷 Name 출력
         CfnOutput.Builder.create(this, "BucketName")
                 .description("ARN for the S3 Bucket Name")
-                .value(bucket.getBucketName()) // 버킷 Name 출력
+                .value(bucket.getBucketName())
                 .build();
 
         // 버킷 URL 출력
@@ -229,6 +261,10 @@ public class AwsCdkStack extends Stack {
                 .value(bucket.getBucketWebsiteUrl()) // 버킷의 정적 웹사이트 URL
                 .build();
 
-
+        // RDS 엔드포인트 주소 출력
+        CfnOutput.Builder.create(this, "RdsEndpointAddress")
+                .value(rdsInstance.getDbInstanceEndpointAddress())
+                .description("Endpoint address for the RDS instance")
+                .build();
     }
 }
