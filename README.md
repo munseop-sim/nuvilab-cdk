@@ -14,6 +14,7 @@
 2. RDS
     - 로컬접속은 `BASTION SERVER`서버를 통해서 포트포워딩
     - 직접적인 접근 불가 
+    - **생성된 계정에 대한 정보는 secret manager에서 확인**
 3. ELASTICACHE
     - 로컬접속은 `BASTION SERVER`서버를 통해서 포트포워딩
     - 직접적인 접근 불가
