@@ -171,6 +171,7 @@ public class AwsCdkStack extends Stack {
                 .allowAllOutbound(true)
                 .build();
         rdsSecurityGroup.addIngressRule(bastionSecurityGroup, Port.tcp(3306), "Allow Bastion Host to connect to RDS");
+        rdsSecurityGroup.addIngressRule(webServerSecurityGroup, Port.tcp(3306), "Allow Server Host to connect to RDS");
 
         DatabaseInstance rdsInstance = DatabaseInstance.Builder.create(this, "MyRDSInstance")
                 .engine(DatabaseInstanceEngine.mysql(MySqlInstanceEngineProps.builder().version(MysqlEngineVersion.VER_8_4_3).build()))
@@ -190,6 +191,8 @@ public class AwsCdkStack extends Stack {
                 .allowAllOutbound(true)
                 .build();
         elasticacheSecurityGroup.addIngressRule(bastionSecurityGroup, Port.tcp(6379), "Allow access to Redis from Bastion Host");
+        elasticacheSecurityGroup.addIngressRule(webServerSecurityGroup, Port.tcp(6379), "Allow access to Redis from Server");
+
         // 서브넷 그룹 생성 (Private Subnets)
         // 서브넷 ID 디버깅 출력
         List<String> subnetIds = vpc.getIsolatedSubnets().stream()
