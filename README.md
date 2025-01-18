@@ -22,7 +22,8 @@
    - GIT HUB Action으로 생성된 파일을 업로드하기 위함
 5. CODE DEPLOY
    - DEV, PROD 환경에 배포 하기 위함
-6. 기타
+6. VPC
+7. 기타
    - 배포 완료시에 각 환격에 대해서 아래와 같이 콘솔화면에 출력하도록 진행함
    ```shell
    AwsCdkStack.BucketName = nuvilab.task.bucket-dev
